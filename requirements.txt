@@ -1,0 +1,8 @@
+streamlit
+langchain
+openai
+pandas
+docx2txt
+PyPDF2
+boto3
+sqlalchemy
