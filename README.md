@@ -6,8 +6,8 @@ This project provides a minimal playground for experimenting with a single-agent
 - Upload documents (`.pdf`, `.txt`, `.docx`)
 - Upload a single CSV file that is automatically loaded into an in-memory SQLite database
 - The agent generates SQL queries against this database and shows both the query and results
-- Use the **Schema Prompt** field to provide table schema or instructions before each text-to-SQL call
-- Live editable system and schema prompts
+- Use the **Schema Prompt** field to provide table schema or instructions before each text-to-SQL call. The schema prompt is injected into the SQL generation step.
+- Live editable system and schema prompts influence the agent immediately
 - Simple chat interface with optional conversation memory
 - Basic model selector (uses Amazon Bedrock models)
 - Powered by **LangChain**, exposing tools for SQL querying and document context
