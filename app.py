@@ -11,6 +11,7 @@ try:
     from langchain.memory import ConversationBufferMemory
     from langchain.chains import SQLDatabaseChain
     from langchain.sql_database import SQLDatabase
+    from langchain.prompts import PromptTemplate
 except Exception:
     Bedrock = None
 
@@ -85,7 +86,7 @@ def load_document(file):
     return ""
 
 
-def create_langchain_agent(llm, memory):
+def create_langchain_agent(llm, memory, system_prompt: str, schema_prompt: str):
     """Create a LangChain agent with tools for SQL and document context."""
     tools = []
 
@@ -93,7 +94,13 @@ def create_langchain_agent(llm, memory):
         db = st.session_state.sql_db
 
         def sql_tool(query: str) -> str:
-            chain = SQLDatabaseChain.from_llm(llm, db, verbose=False)
+            sql_prompt = PromptTemplate(
+                input_variables=["input", "table_info", "dialect"],
+                template=f"{schema_prompt}\n{{input}}",
+            )
+            chain = SQLDatabaseChain.from_llm(
+                llm, db, verbose=False, prompt=sql_prompt
+            )
             try:
                 return chain.run(query)
             except Exception as e:
@@ -125,6 +132,7 @@ def create_langchain_agent(llm, memory):
         tools,
         llm,
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+        agent_kwargs={"prefix": system_prompt},
         verbose=False,
         memory=memory,
         handle_parsing_errors=True,
@@ -152,7 +160,7 @@ if Bedrock:
     llm = Bedrock(client=client, model_id=model)
 
 memory = ConversationBufferMemory(memory_key="chat_history") if memory_toggle else None
-agent = create_langchain_agent(llm, memory) if llm else None
+agent = create_langchain_agent(llm, memory, system_prompt, schema_prompt) if llm else None
 
 user_msg = st.chat_input("Ask something")
 if user_msg:
