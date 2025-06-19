@@ -5,6 +5,12 @@ import streamlit as st
 import sqlalchemy
 import tempfile
 
+# Import LangChain components used to build the vector database and agent
+from langchain.docstore.document import Document  # container for text passages
+from langchain.text_splitter import RecursiveCharacterTextSplitter  # split documents into chunks
+from langchain.embeddings.openai import OpenAIEmbeddings  # create embeddings for text
+from langchain.vectorstores import FAISS  # in-memory vector store for similarity search
+
 try:
     from langchain.llms.bedrock import Bedrock
     from langchain.agents import initialize_agent, AgentType, Tool
@@ -13,18 +19,19 @@ try:
     from langchain.sql_database import SQLDatabase
     from langchain.prompts import PromptTemplate
 except Exception:
+    # LangChain extras may not be available in minimal environments
     Bedrock = None
 
-# Optional dependencies
+# Optional dependencies for document parsing
 try:
     import docx2txt
 except ImportError:
     docx2txt = None
 
 try:
-    from PyPDF2 import PdfReader
+    from PyPDF2 import PdfReader  # used for extracting text from PDFs
 except ImportError:
-    PdfReader = None
+    PdfReader = None  # PDF support is optional
 
 # Setup page
 st.set_page_config(page_title="Single-Agent LLM Playground", layout="wide")
@@ -34,9 +41,29 @@ st.title("Single-Agent LLM Playground")
 # Sidebar for uploads and prompt editing
 with st.sidebar:
     st.header("Uploads")
+    # Allow multiple document uploads. When the set of files changes we rebuild
+    # the vector index so queries see the latest content.
     uploaded_docs = st.file_uploader(
         "Upload documents", type=["pdf", "txt", "docx"], accept_multiple_files=True
     )
+    if uploaded_docs:
+        doc_names = [f.name for f in uploaded_docs]
+        if (
+            "doc_names" not in st.session_state
+            or st.session_state.doc_names != doc_names
+        ):
+            # Read each file and pull out its text
+            texts = [load_document(f) for f in uploaded_docs]
+            # Wrap raw strings in LangChain Document objects
+            docs = [Document(page_content=t) for t in texts]
+            # Break large documents into smaller chunks for embedding
+            splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+            splits = splitter.split_documents(docs)
+            # Create embeddings and store them in a FAISS index
+            embeddings = OpenAIEmbeddings()
+            st.session_state.doc_index = FAISS.from_documents(splits, embeddings)
+            st.session_state.doc_names = doc_names
+    # Single CSV upload is loaded into an in-memory SQLite database
     uploaded_csv = st.file_uploader("Upload CSV", type=["csv"], accept_multiple_files=False)
     if uploaded_csv:
         if "csv_name" not in st.session_state or st.session_state.csv_name != uploaded_csv.name:
@@ -91,6 +118,7 @@ def create_langchain_agent(llm, memory, system_prompt: str, schema_prompt: str):
     tools = []
 
     if Bedrock and SQLDatabase and "sql_db" in st.session_state:
+        # Build a tool that lets the agent run SQL against the uploaded CSV
         db = st.session_state.sql_db
 
         def sql_tool(query: str) -> str:
@@ -114,17 +142,19 @@ def create_langchain_agent(llm, memory, system_prompt: str, schema_prompt: str):
             )
         )
 
-    def doc_tool(_: str) -> str:
-        if uploaded_docs:
-            texts = [load_document(f) for f in uploaded_docs]
-            return "\n".join(texts)
+    def doc_tool(query: str) -> str:
+        """Search the FAISS index for passages relevant to the query."""
+        if "doc_index" in st.session_state:
+            docs = st.session_state.doc_index.similarity_search(query, k=4)
+            # Concatenate the retrieved text chunks for the agent
+            return "\n".join(d.page_content for d in docs)
         return ""
 
     tools.append(
         Tool(
             name="document_context",
             func=doc_tool,
-            description="Return the text of uploaded documents",
+            description="Search uploaded documents. Input is your query",
         )
     )
 
@@ -162,9 +192,11 @@ if Bedrock:
 memory = ConversationBufferMemory(memory_key="chat_history") if memory_toggle else None
 agent = create_langchain_agent(llm, memory, system_prompt, schema_prompt) if llm else None
 
+# Main chat input box. The agent will see this message and reply.
 user_msg = st.chat_input("Ask something")
 if user_msg:
     if agent:
+        # Run the query through the agent and collect intermediate reasoning steps
         result = agent.invoke({"input": user_msg})
         answer = result.get("output", "")
         steps = result.get("intermediate_steps", [])
@@ -176,6 +208,7 @@ if user_msg:
         st.write(answer)
 
 st.header("Chain of Thought")
+# Optional debug panels to inspect how the agent arrived at its answer
 if st.checkbox("Show raw history"):
     st.json(st.session_state.history)
 if steps and st.checkbox("Show intermediate steps"):
